@@ -1358,6 +1358,12 @@ uint16_t L2CA_SendFixedChnlData(uint16_t fixed_cid, const RawAddress& rem_bda,
                         p_buf);
 
   l2c_link_check_send_pkts(p_lcb, 0, NULL);
+  // Sending can synchronously release this link and its fixed channel.
+  if (!p_lcb->in_use ||
+      p_lcb->p_fixed_ccbs[fixed_cid - L2CAP_FIRST_FIXED_CHNL] == nullptr) {
+    return L2CAP_DW_FAILED;
+  }
+
 
   // If there is no dynamic CCB on the link, restart the idle timer each time
   // something is sent

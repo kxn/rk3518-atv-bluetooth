@@ -2879,6 +2879,13 @@ void btif_dm_cancel_bond(const RawAddress bd_addr) {
 void btif_dm_hh_open_failed(RawAddress* bdaddr) {
   if (pairing_cb.state == BT_BOND_STATE_BONDING &&
       *bdaddr == pairing_cb.bd_addr) {
+    // An LE HID GATT client can close while SMP repairs a missing peer key.
+    // Only SMP completion may terminate that bond; a profile-open failure is
+    // not a pairing failure and can otherwise invalidate pending consent.
+    if (pairing_cb.is_le_only) {
+      log::info("Keep LE pairing active after HID open failure");
+      return;
+    }
     bond_state_changed(BT_STATUS_RMT_DEV_DOWN, *bdaddr, BT_BOND_STATE_NONE);
   }
 }

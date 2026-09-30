@@ -50,6 +50,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/mman.h>
+#include <errno.h>
+#include <future>
+#include <chrono>
+#include <memory>
 
 #include "audio_hal_interface/a2dp_encoding.h"
 #include "bta/hh/bta_hh_int.h"  // for HID HACK profile methods
@@ -806,6 +811,19 @@ static int set_event_filter_connection_setup_all_devices() {
   return BT_STATUS_SUCCESS;
 }
 
+struct ConnectionDump {
+  explicit ConnectionDump(int descriptor) : fd(descriptor) {}
+  ~ConnectionDump() { close(fd); }
+  const int fd;
+  std::promise<void> completed;
+};
+
+static void dump_connections_on_main(std::shared_ptr<ConnectionDump> snapshot) {
+  // Never write a potentially blocked dumpsys pipe on the Bluetooth main thread.
+  connection_manager::dump(snapshot->fd);
+  snapshot->completed.set_value();
+}
+
 static void dump(int fd, const char** arguments) {
   btif_debug_conn_dump(fd);
   btif_debug_bond_event_dump(fd);
@@ -829,7 +847,35 @@ static void dump(int fd, const char** arguments) {
   LeAudioClient::DebugDump(fd);
   LeAudioBroadcaster::DebugDump(fd);
   VolumeControl::DebugDump(fd);
-  connection_manager::dump(fd);
+  const int connection_fd = memfd_create("bt-connection-dump", MFD_CLOEXEC);
+  if (connection_fd >= 0) {
+    auto snapshot = std::make_shared<ConnectionDump>(connection_fd);
+    auto result = snapshot->completed.get_future();
+    bool posted = true;
+    if (get_main_thread()->GetThreadId() == base::PlatformThread::CurrentId()) {
+      dump_connections_on_main(snapshot);
+    } else {
+      posted = do_in_main_thread(FROM_HERE,
+          base::BindOnce(dump_connections_on_main, snapshot)) == BT_STATUS_SUCCESS;
+    }
+    if (posted && result.wait_for(std::chrono::seconds(2)) == std::future_status::ready &&
+        lseek(connection_fd, 0, SEEK_SET) >= 0) {
+      char buffer[4096];
+      ssize_t count;
+      while ((count = TEMP_FAILURE_RETRY(read(connection_fd, buffer, sizeof(buffer)))) > 0) {
+        ssize_t offset = 0;
+        while (offset < count) {
+          ssize_t written = TEMP_FAILURE_RETRY(write(fd, buffer + offset, count - offset));
+          if (written <= 0) break;
+          offset += written;
+        }
+        if (offset < count) break;
+      }
+    } else {
+      dprintf(fd, "Connection snapshot unavailable (Bluetooth main thread busy).\n");
+    }
+    // A queued callback owns its snapshot even if the caller timed out.
+  }
   bluetooth::bqr::DebugDump(fd);
   PAN_Dumpsys(fd);
   DumpsysHid(fd);

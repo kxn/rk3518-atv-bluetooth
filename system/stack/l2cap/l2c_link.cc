@@ -803,6 +803,11 @@ static bool l2c_link_check_power_mode(tL2C_LCB* p_lcb) {
  ******************************************************************************/
 void l2c_link_check_send_pkts(tL2C_LCB* p_lcb, uint16_t local_cid,
                               BT_HDR* p_buf) {
+  if (p_lcb != nullptr && (!p_lcb->in_use || p_lcb->link_xmit_data_q == nullptr)) {
+    if (p_buf != nullptr) osi_free(p_buf);
+    return;
+  }
+
   bool single_write = false;
 
   /* Save the channel ID for faster counting */
@@ -920,6 +925,7 @@ void l2c_link_check_send_pkts(tL2C_LCB* p_lcb, uint16_t local_cid,
             (l2cb.controller_le_xmit_window != 0 &&
              (p_lcb->transport == BT_TRANSPORT_LE))) &&
            (p_lcb->sent_not_acked < p_lcb->link_xmit_quota)) {
+      if (!p_lcb->in_use || p_lcb->link_xmit_data_q == nullptr) return;
       if (list_is_empty(p_lcb->link_xmit_data_q)) {
         log::verbose("No transmit data, skipping");
         break;
@@ -946,8 +952,11 @@ void l2c_link_check_send_pkts(tL2C_LCB* p_lcb, uint16_t local_cid,
         }
         log::verbose("Sending to lower layer");
         l2c_link_send_to_lower(p_lcb, p_buf, &cbi);
+        if (!p_lcb->in_use || p_lcb->link_xmit_data_q == nullptr) return;
       }
     }
+
+    if (!p_lcb->in_use || p_lcb->link_xmit_data_q == nullptr) return;
 
     /* There is a special case where we have readjusted the link quotas and  */
     /* this link may have sent anything but some other link sent packets so  */

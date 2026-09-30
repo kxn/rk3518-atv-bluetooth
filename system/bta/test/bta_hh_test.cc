@@ -106,3 +106,31 @@ TEST_F(BtaHhTest, bta_hh_ctrl_dat_act__BTA_HH_GET_RPT_EVT) {
   bta_hh_ctrl_dat_act(&cb, &data);
   ASSERT_EQ(cb.w4_evt, 0);
 }
+
+// A rejected persisted key must lead to one SMP operation, not a GATT close.
+TEST_F(BtaHhTest, MissingPeerKeyKeepsGattClientForRepair) {
+  tBTA_HH_DEV_CB cb{};
+  cb.is_le_device = true;
+  cb.status = BTA_HH_ERR_SEC;
+  cb.btm_status = BTM_ERR_KEY_MISSING;
+  cb.state = BTA_HH_W4_CONN_ST;
+  bta_hh_security_cmpl(&cb, nullptr);
+  ASSERT_EQ(cb.state, BTA_HH_W4_SEC);
+  ASSERT_EQ(get_func_call_count("BTM_SetEncryption"), 1);
+  ASSERT_EQ(get_func_call_count("BTA_GATTC_Close"), 0);
+}
+
+TEST_F(BtaHhTest, LocalSecurityFailureDoesNotRequeueGattOpen) {
+  tBTA_HH_DEV_CB cb{};
+  cb.is_le_device = true;
+  cb.status = BTA_HH_ERR_SEC;
+  tBTA_HH_DATA data{};
+  data.le_close.reason = GATT_CONN_TERMINATE_LOCAL_HOST;
+  // The callback is still delivered so the owner can schedule bounded recovery.
+  bta_hh_cb.p_cback = [](tBTA_HH_EVT event, tBTA_HH*) {
+    ASSERT_EQ(event, BTA_HH_OPEN_EVT);
+  };
+  bta_hh_le_open_fail(&cb, &data);
+  ASSERT_EQ(get_func_call_count("BTA_GATTC_Open"), 0);
+  ASSERT_EQ(get_func_call_count("BTA_GATTC_OpenWithRemoteAddressType"), 0);
+}

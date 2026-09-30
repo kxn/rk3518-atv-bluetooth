@@ -1027,11 +1027,13 @@ void bta_hh_security_cmpl(tBTA_HH_DEV_CB* p_cb,
       bta_hh_le_pri_service_discovery(p_cb);
     }
   }
-  else if(p_cb->btm_status == BTM_ERR_KEY_MISSING) {
-    log::error("Received encryption failed status:{} btm_status:{}",
-               bta_hh_status_text(p_cb->status),
-               btm_status_text(p_cb->btm_status));
-    bta_hh_le_api_disc_act(p_cb);
+  else if (p_cb->btm_status == BTM_ERR_KEY_MISSING) {
+    // BTM has invalidated the rejected LTK. Keep this GATT client attached
+    // while SMP obtains a new bond instead of closing and reopening it in a
+    // tight loop on the still-live ACL.
+    log::info("Peer key missing; wait for LE re-pairing on existing link");
+    p_cb->state = BTA_HH_W4_SEC;
+    bta_hh_start_security(p_cb, nullptr);
   } else {
     log::error("Encryption failed status:{} btm_status:{}",
                bta_hh_status_text(p_cb->status),
@@ -1659,7 +1661,16 @@ void bta_hh_le_open_fail(tBTA_HH_DEV_CB* p_cb, const tBTA_HH_DATA* p_data) {
     bta_hh_clear_service_cache(p_cb);
   }
 
-  if (p_cb->is_le_device && p_cb->status != BTA_HH_ERR_SDP) {
+  // A local GATT close after a security failure is not a lost radio link.
+  // Re-adding it immediately reconnects to the same ACL and repeatedly starts
+  // SMP. Reconnect automatically only for recoverable remote/link failures.
+  const bool link_failure =
+      le_close->reason == GATT_CONN_FAILED_ESTABLISHMENT ||
+      le_close->reason == GATT_CONN_TERMINATE_PEER_USER ||
+      le_close->reason == GATT_CONN_TIMEOUT;
+  if (p_cb->is_le_device && link_failure &&
+      p_cb->status != BTA_HH_ERR_SDP && p_cb->status != BTA_HH_ERR_SEC &&
+      p_cb->status != BTA_HH_ERR_AUTH_FAILED) {
     log::debug("gd_acl: Re-adding HID device to acceptlist");
     // gd removes from bg list after failed connection
     // Correct the cached state to allow re-add to acceptlist.

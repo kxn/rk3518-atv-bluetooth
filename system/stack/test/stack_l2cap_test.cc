@@ -246,3 +246,11 @@ TEST_F(StackL2capTest, l2cap_result_code_text) {
           static_cast<tL2CAP_CONN>(std::numeric_limits<std::uint16_t>::max()))
           .c_str());
 }
+
+TEST_F(StackL2capTest, transmit_after_acl_release_drops_owned_buffer) {
+  tL2C_LCB released = {};
+  auto* packet = static_cast<BT_HDR*>(osi_calloc(sizeof(BT_HDR)));
+  l2c_link_check_send_pkts(&released, L2CAP_SMP_CID, packet);
+  EXPECT_FALSE(released.in_use);
+  EXPECT_EQ(nullptr, released.link_xmit_data_q);
+}
